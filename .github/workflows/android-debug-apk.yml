@@ -16,7 +16,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4.0.4
 
       - name: Install Android 36.1 SDK
         run: |
