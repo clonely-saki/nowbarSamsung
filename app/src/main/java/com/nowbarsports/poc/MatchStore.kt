@@ -7,26 +7,17 @@ object MatchStore {
 
     fun save(context: Context, s: MatchSnapshot) {
         context.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
-            .putString("kind", s.kind.name)
-            .putString("title", s.title)
-            .putString("summary", s.summary)
-            .putString("details", s.details)
-            .putString("chip", s.chip)
+            .putString("eventId", s.eventId)
             .putInt("step", s.step)
             .apply()
     }
 
     fun load(context: Context): MatchSnapshot? {
         val p = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-        val kind = p.getString("kind", null) ?: return null
-        return MatchSnapshot(
-            kind = MatchKind.valueOf(kind),
-            title = p.getString("title", "") ?: "",
-            summary = p.getString("summary", "") ?: "",
-            details = p.getString("details", "") ?: "",
-            chip = p.getString("chip", "") ?: "",
-            step = p.getInt("step", 0)
-        )
+        val eventId = p.getString("eventId", null) ?: return null
+        return runCatching {
+            MatchSimulator.snapshot(eventId, p.getInt("step", 0))
+        }.getOrNull()
     }
 
     fun clear(context: Context) {
