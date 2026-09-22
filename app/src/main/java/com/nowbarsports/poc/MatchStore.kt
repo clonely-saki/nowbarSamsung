@@ -12,12 +12,10 @@ object MatchStore {
             .apply()
     }
 
-    fun load(context: Context): MatchSnapshot? {
+    fun load(context: Context, dataSource: MatchDataSource): MatchSnapshot? {
         val p = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
         val eventId = p.getString("eventId", null) ?: return null
-        return runCatching {
-            MatchSimulator.snapshot(eventId, p.getInt("step", 0))
-        }.getOrNull()
+        return dataSource.restore(eventId, p.getInt("step", 0))
     }
 
     fun clear(context: Context) {
