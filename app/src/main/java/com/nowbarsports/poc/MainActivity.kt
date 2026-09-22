@@ -5,121 +5,113 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.view.Gravity
-import android.view.ViewGroup
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
-import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 
-class MainActivity : Activity() {
-    private lateinit var statusText: TextView
-    private lateinit var currentText: TextView
+class MainActivity : ComponentActivity() {
+    private var refreshScreen: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         LiveMatchNotifier.ensureChannel(this)
-        setContentView(buildUi())
+        setContent {
+            var refreshKey by remember { mutableIntStateOf(0) }
+            val current = remember(refreshKey) { MatchStore.load(this@MainActivity) }
+
+            DisposableEffect(Unit) {
+                refreshScreen = { refreshKey++ }
+                onDispose { refreshScreen = null }
+            }
+
+            SportsNowBarApp(
+                activity = this@MainActivity,
+                current = current,
+                onShowInNowBar = { event ->
+                    if (!LiveMatchNotifier.hasNotificationPermission(this@MainActivity)) {
+                        requestNotificationsIfNeeded()
+                    } else {
+                        val snapshot = if (current?.eventId == event.id) {
+                            current
+                        } else {
+                            MatchSimulator.initial(event.id)
+                        }
+                        LiveMatchNotifier.post(this@MainActivity, snapshot)
+                        refreshKey++
+                    }
+                },
+                onStop = {
+                    LiveMatchNotifier.cancel(this@MainActivity)
+                    refreshKey++
+                },
+                onUpdate = {
+                    current?.let { LiveMatchNotifier.post(this@MainActivity, MatchSimulator.next(it)) }
+                    refreshKey++
+                },
+                onOpenPromotionSettings = ::openPromotionSettings
+            )
+        }
         requestNotificationsIfNeeded()
-        refreshStatus()
     }
 
     override fun onResume() {
         super.onResume()
-        refreshStatus()
-    }
-
-    private fun buildUi(): ScrollView {
-        val pad = dp(20)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad, pad, pad)
-        }
-
-        root.addView(TextView(this).apply {
-            text = "Sports Now Bar Lab"
-            textSize = 28f
-            setTypeface(typeface, Typeface.BOLD)
-        })
-        root.addView(TextView(this).apply {
-            text = "V0.1 · 只验证 Samsung Now Bar / Live Updates"
-            textSize = 15f
-            setPadding(0, dp(4), 0, dp(18))
-        })
-
-        statusText = TextView(this).apply {
-            textSize = 15f
-            setPadding(dp(14), dp(14), dp(14), dp(14))
-        }
-        root.addView(statusText, fullWidth())
-
-        root.addView(sectionTitle("开始一场模拟赛事"))
-        root.addView(button("⚽ 足球 · Arsenal vs Chelsea") { start(MatchKind.FOOTBALL) })
-        root.addView(button("🏀 篮球 · Lakers vs Celtics") { start(MatchKind.BASKETBALL) })
-        root.addView(button("🎮 LOL · BLG vs TES") { start(MatchKind.LOL) })
-
-        root.addView(sectionTitle("控制"))
-        root.addView(button("更新一次比分") { updateOnce() })
-        root.addView(button("结束 Live Update") {
-            LiveMatchNotifier.cancel(this)
-            refreshStatus()
-        })
-        root.addView(button("打开 Live Updates / 提升通知设置") { openPromotionSettings() })
-
-        root.addView(sectionTitle("当前模拟数据"))
-        currentText = TextView(this).apply {
-            textSize = 15f
-            setPadding(dp(14), dp(14), dp(14), dp(14))
-        }
-        root.addView(currentText, fullWidth())
-
-        root.addView(TextView(this).apply {
-            text = "测试方法：开始赛事 → 锁屏观察 Now Bar → 解锁观察状态栏 chip → 从通知/Now Bar 尝试展开 → 点“模拟更新”或回 App 更新 → 最后结束。"
-            textSize = 14f
-            setPadding(0, dp(18), 0, dp(40))
-        })
-
-        return ScrollView(this).apply { addView(root) }
-    }
-
-    private fun start(kind: MatchKind) {
-        if (!LiveMatchNotifier.hasNotificationPermission(this)) {
-            requestNotificationsIfNeeded()
-            Toast.makeText(this, "先允许通知权限", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val snapshot = MatchSimulator.initial(kind)
-        LiveMatchNotifier.post(this, snapshot)
-        refreshStatus()
-    }
-
-    private fun updateOnce() {
-        val current = MatchStore.load(this)
-        if (current == null) {
-            Toast.makeText(this, "请先开始一场赛事", Toast.LENGTH_SHORT).show()
-            return
-        }
-        LiveMatchNotifier.post(this, MatchSimulator.next(current))
-        refreshStatus()
+        refreshScreen?.invoke()
     }
 
     private fun requestNotificationsIfNeeded() {
         if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10)
         }
     }
 
     private fun openPromotionSettings() {
-        if (Build.VERSION.SDK_INT < 36) {
-            Toast.makeText(this, "系统低于 Android 16，不支持 promoted notifications", Toast.LENGTH_LONG).show()
-            return
-        }
+        if (Build.VERSION.SDK_INT < 36) return
         try {
             startActivity(
                 Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS)
@@ -132,40 +124,222 @@ class MainActivity : Activity() {
             )
         }
     }
+}
 
-    private fun refreshStatus() {
-        val notif = LiveMatchNotifier.hasNotificationPermission(this)
-        val promoted = if (Build.VERSION.SDK_INT >= 36) LiveMatchNotifier.canPostPromoted(this) else false
-        val fullSdk = if (Build.VERSION.SDK_INT >= 36) Build.VERSION.SDK_INT_FULL.toString() else "n/a"
-        statusText.text = buildString {
-            append("Android API: ").append(Build.VERSION.SDK_INT).append("  · full: ").append(fullSdk).append('\n')
-            append("普通通知权限: ").append(if (notif) "✅" else "❌").append('\n')
-            append("可发布 Promoted/Live Update: ").append(if (promoted) "✅" else "❌ / 未开启")
+@Composable
+private fun SportsNowBarApp(
+    activity: Activity,
+    current: MatchSnapshot?,
+    onShowInNowBar: (MockEvent) -> Unit,
+    onStop: () -> Unit,
+    onUpdate: () -> Unit,
+    onOpenPromotionSettings: () -> Unit
+) {
+    val displayEvents = remember(current?.eventId, current?.step) {
+        MockEventCatalog.events.map { event ->
+            if (event.id == current?.eventId) current else MatchSimulator.initial(event.id)
         }
-
-        val current = MatchStore.load(this)
-        currentText.text = current?.let { "${it.title}\n${it.summary}\n\n${it.details}\n\nchip = ${it.chip}" }
-            ?: "暂无正在进行的模拟赛事"
     }
 
-    private fun sectionTitle(text: String) = TextView(this).apply {
-        this.text = text
-        textSize = 18f
-        setTypeface(typeface, Typeface.BOLD)
-        setPadding(0, dp(24), 0, dp(8))
+    MaterialTheme {
+        Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF7F8FA)) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item {
+                    Column {
+                        Text(
+                            text = if (BuildConfig.SAMSUNG_DIAGNOSTIC) {
+                                "Samsung Now Bar Diagnostic — NOT FOR DISTRIBUTION"
+                            } else {
+                                "体育 Now Bar"
+                            },
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "足球 · 篮球 · 英雄联盟 · 一级方程式",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+
+                item { DiagnosticCard(activity, onOpenPromotionSettings) }
+                eventSectionCard("进行中", displayEvents.filter { it.section == EventSection.LIVE }, current, onShowInNowBar, onStop, onUpdate)
+                eventSectionCard("即将开始", displayEvents.filter { it.section == EventSection.UPCOMING }, current, onShowInNowBar, onStop, onUpdate)
+                eventSectionCard("已结束", displayEvents.filter { it.section == EventSection.FINISHED }, current, onShowInNowBar, onStop, onUpdate)
+
+                item {
+                    Text(
+                        text = "仅使用模拟数据。开始赛事，检查 Now Bar 紧凑状态，更新后再停止。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                }
+            }
+        }
     }
+}
 
-    private fun button(text: String, onClick: () -> Unit) = Button(this).apply {
-        this.text = text
-        isAllCaps = false
-        gravity = Gravity.CENTER_VERTICAL
-        setOnClickListener { onClick() }
+@Composable
+private fun DiagnosticCard(activity: Activity, onOpenPromotionSettings: () -> Unit) {
+    val notificationAllowed = LiveMatchNotifier.hasNotificationPermission(activity)
+    val promotedAllowed = Build.VERSION.SDK_INT >= 36 && LiveMatchNotifier.canPostPromoted(activity)
+    val metadataPresent = activity.packageManager.getApplicationInfo(
+        activity.packageName,
+        PackageManager.GET_META_DATA
+    ).metaData?.getBoolean(LiveMatchNotifier.SAMSUNG_METADATA_KEY, false) == true
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("平台状态", fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text("包名：${activity.packageName}", style = MaterialTheme.typography.bodySmall)
+            Text("Android API：${Build.VERSION.SDK_INT}", style = MaterialTheme.typography.bodySmall)
+            Text("通知权限：${if (notificationAllowed) "已允许" else "未允许"}", style = MaterialTheme.typography.bodySmall)
+            Text("Promoted 通知：${if (promotedAllowed) "已允许" else "未允许/不可用"}", style = MaterialTheme.typography.bodySmall)
+            Text("Samsung 元数据：${if (metadataPresent) "已存在" else "缺失"}", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = onOpenPromotionSettings) { Text("打开 Live Updates 设置") }
+        }
     }
+}
 
-    private fun fullWidth() = LinearLayout.LayoutParams(
-        ViewGroup.LayoutParams.MATCH_PARENT,
-        ViewGroup.LayoutParams.WRAP_CONTENT
-    )
+private fun LazyListScope.eventSectionCard(
+    title: String,
+    snapshots: List<MatchSnapshot>,
+    current: MatchSnapshot?,
+    onShowInNowBar: (MockEvent) -> Unit,
+    onStop: () -> Unit,
+    onUpdate: () -> Unit
+) {
+    item {
+        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+    }
+    items(snapshots, key = { it.eventId }) { snapshot ->
+        EventCard(
+            snapshot = snapshot,
+            isShownInNowBar = snapshot.eventId == current?.eventId,
+            onShowInNowBar = { MockEventCatalog.find(snapshot.eventId)?.let(onShowInNowBar) },
+            onStop = onStop,
+            onUpdate = onUpdate
+        )
+    }
+}
 
-    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+@Composable
+private fun EventCard(
+    snapshot: MatchSnapshot,
+    isShownInNowBar: Boolean,
+    onShowInNowBar: () -> Unit,
+    onStop: () -> Unit,
+    onUpdate: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FilterChip(
+                    selected = snapshot.section == EventSection.LIVE,
+                    onClick = {},
+                    label = { Text(snapshot.kind.displayName()) },
+                    enabled = false
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = snapshot.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+            BrandingRow(snapshot.branding)
+            Spacer(Modifier.height(12.dp))
+            Text("Now Bar 紧凑预览", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(snapshot.compactPrimary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            if (!snapshot.compactSecondary.isNullOrBlank()) {
+                Text(snapshot.compactSecondaryLine, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+            }
+            if (snapshot.kind == MatchKind.LOL && snapshot.lolPhase == LolPhase.BETWEEN_GAMES) {
+                Text("两局之间", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Text(snapshot.expandedDetails, style = MaterialTheme.typography.bodyMedium)
+
+            if (snapshot.section == EventSection.LIVE || isShownInNowBar) {
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (isShownInNowBar) {
+                        OutlinedButton(onClick = onStop) { Text("停止") }
+                        if (snapshot.section == EventSection.LIVE) {
+                            Button(onClick = onUpdate) { Text("更新") }
+                        }
+                    } else {
+                        Button(onClick = onShowInNowBar) { Text("显示在 Now Bar") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BrandingRow(branding: EventBranding) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        BrandBadge(branding.competition, compact = true)
+        Spacer(Modifier.weight(1f))
+        BrandBadge(branding.primary)
+        if (branding.secondary != null) {
+            Text("对阵", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            BrandBadge(branding.secondary)
+        }
+    }
+}
+
+@Composable
+private fun BrandBadge(identity: BrandIdentity, compact: Boolean = false) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier
+                .size(if (compact) 30.dp else 42.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            if (identity.logoResId != null) {
+                Icon(
+                    painter = painterResource(identity.logoResId),
+                    contentDescription = identity.name,
+                    tint = Color.Unspecified,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text(
+                    text = identity.initials,
+                    style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+        Text(identity.shortName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+    }
+}
+
+private fun MatchKind.displayName(): String = when (this) {
+    MatchKind.FOOTBALL -> "足球"
+    MatchKind.BASKETBALL -> "篮球"
+    MatchKind.LOL -> "英雄联盟"
+    MatchKind.FORMULA1 -> "一级方程式"
 }

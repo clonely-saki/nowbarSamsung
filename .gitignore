@@ -4,4 +4,7 @@ local.properties
 *.iml
 build/
 app/build/
+outputs/
+work/
+.kotlin/
 .DS_Store

@@ -6,8 +6,12 @@
 
     <application
         android:allowBackup="true"
-        android:label="Sports Now Bar Lab"
+        android:label="@string/app_name"
         android:theme="@style/AppTheme">
+
+        <meta-data
+            android:name="com.samsung.android.support.ongoing_activity"
+            android:value="true" />
 
         <activity
             android:name=".MainActivity"
