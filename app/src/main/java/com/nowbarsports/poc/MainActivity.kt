@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 class MainActivity : ComponentActivity() {
+    private val matchDataSource: MatchDataSource = MatchDataSources.current
     private var refreshScreen: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,7 +61,9 @@ class MainActivity : ComponentActivity() {
         LiveMatchNotifier.ensureChannel(this)
         setContent {
             var refreshKey by remember { mutableIntStateOf(0) }
-            val current = remember(refreshKey) { MatchStore.load(this@MainActivity) }
+            val current = remember(refreshKey) {
+                MatchStore.load(this@MainActivity, matchDataSource)
+            }
 
             DisposableEffect(Unit) {
                 refreshScreen = { refreshKey++ }
@@ -69,6 +72,7 @@ class MainActivity : ComponentActivity() {
 
             SportsNowBarApp(
                 activity = this@MainActivity,
+                dataSource = matchDataSource,
                 current = current,
                 onShowInNowBar = { event ->
                     if (!LiveMatchNotifier.hasNotificationPermission(this@MainActivity)) {
@@ -77,7 +81,7 @@ class MainActivity : ComponentActivity() {
                         val snapshot = if (current?.eventId == event.id) {
                             current
                         } else {
-                            MatchSimulator.initial(event.id)
+                            matchDataSource.initial(event.id)
                         }
                         LiveMatchNotifier.post(this@MainActivity, snapshot)
                         refreshKey++
@@ -88,7 +92,9 @@ class MainActivity : ComponentActivity() {
                     refreshKey++
                 },
                 onUpdate = {
-                    current?.let { LiveMatchNotifier.post(this@MainActivity, MatchSimulator.next(it)) }
+                    current?.let {
+                        LiveMatchNotifier.post(this@MainActivity, matchDataSource.next(it))
+                    }
                     refreshKey++
                 },
                 onOpenPromotionSettings = ::openPromotionSettings
@@ -129,15 +135,16 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun SportsNowBarApp(
     activity: Activity,
+    dataSource: MatchDataSource,
     current: MatchSnapshot?,
     onShowInNowBar: (MockEvent) -> Unit,
     onStop: () -> Unit,
     onUpdate: () -> Unit,
     onOpenPromotionSettings: () -> Unit
 ) {
-    val displayEvents = remember(current?.eventId, current?.step) {
-        MockEventCatalog.events.map { event ->
-            if (event.id == current?.eventId) current else MatchSimulator.initial(event.id)
+    val displayEvents = remember(current?.eventId, current?.step, dataSource) {
+        dataSource.events().map { event ->
+            if (event.id == current?.eventId) current else dataSource.initial(event.id)
         }
     }
 
@@ -169,9 +176,9 @@ private fun SportsNowBarApp(
                 }
 
                 item { DiagnosticCard(activity, onOpenPromotionSettings) }
-                eventSectionCard("进行中", displayEvents.filter { it.section == EventSection.LIVE }, current, onShowInNowBar, onStop, onUpdate)
-                eventSectionCard("即将开始", displayEvents.filter { it.section == EventSection.UPCOMING }, current, onShowInNowBar, onStop, onUpdate)
-                eventSectionCard("已结束", displayEvents.filter { it.section == EventSection.FINISHED }, current, onShowInNowBar, onStop, onUpdate)
+                eventSectionCard("进行中", displayEvents.filter { it.section == EventSection.LIVE }, dataSource, current, onShowInNowBar, onStop, onUpdate)
+                eventSectionCard("即将开始", displayEvents.filter { it.section == EventSection.UPCOMING }, dataSource, current, onShowInNowBar, onStop, onUpdate)
+                eventSectionCard("已结束", displayEvents.filter { it.section == EventSection.FINISHED }, dataSource, current, onShowInNowBar, onStop, onUpdate)
 
                 item {
                     Text(
@@ -212,6 +219,7 @@ private fun DiagnosticCard(activity: Activity, onOpenPromotionSettings: () -> Un
 private fun LazyListScope.eventSectionCard(
     title: String,
     snapshots: List<MatchSnapshot>,
+    dataSource: MatchDataSource,
     current: MatchSnapshot?,
     onShowInNowBar: (MockEvent) -> Unit,
     onStop: () -> Unit,
@@ -224,7 +232,7 @@ private fun LazyListScope.eventSectionCard(
         EventCard(
             snapshot = snapshot,
             isShownInNowBar = snapshot.eventId == current?.eventId,
-            onShowInNowBar = { MockEventCatalog.find(snapshot.eventId)?.let(onShowInNowBar) },
+            onShowInNowBar = { dataSource.findEvent(snapshot.eventId)?.let(onShowInNowBar) },
             onStop = onStop,
             onUpdate = onUpdate
         )
