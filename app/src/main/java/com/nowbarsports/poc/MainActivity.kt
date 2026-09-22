@@ -41,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -54,6 +55,7 @@ import androidx.compose.ui.unit.dp
 
 class MainActivity : ComponentActivity() {
     private val matchDataSource: MatchDataSource = MatchDataSources.current
+    private val footballRealDataSource: FootballRealDataSource = MatchDataSources.footballReal
     private var refreshScreen: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,8 +63,13 @@ class MainActivity : ComponentActivity() {
         LiveMatchNotifier.ensureChannel(this)
         setContent {
             var refreshKey by remember { mutableIntStateOf(0) }
+            var realLoading by remember { mutableStateOf(false) }
+            var realMessage by remember { mutableStateOf<String?>(null) }
             val current = remember(refreshKey) {
                 MatchStore.load(this@MainActivity, matchDataSource)
+            }
+            val followState = remember(refreshKey) {
+                FollowStore.load(this@MainActivity)
             }
 
             DisposableEffect(Unit) {
@@ -74,7 +81,15 @@ class MainActivity : ComponentActivity() {
                 activity = this@MainActivity,
                 dataSource = matchDataSource,
                 current = current,
-                onShowInNowBar = { event ->
+                followState = followState,
+                realFixtureId = footballRealDataSource.configuredFixtureId,
+                realConfigured = footballRealDataSource.isConfigured,
+                realTracked = followState.isTracked(
+                    FootballRealDataSource.eventIdFor(footballRealDataSource.configuredFixtureId)
+                ),
+                realLoading = realLoading,
+                realMessage = realMessage,
+                onTrackMatch = { event ->
                     if (!LiveMatchNotifier.hasNotificationPermission(this@MainActivity)) {
                         requestNotificationsIfNeeded()
                     } else {
@@ -83,19 +98,77 @@ class MainActivity : ComponentActivity() {
                         } else {
                             matchDataSource.initial(event.id)
                         }
+                        FollowStore.trackMatch(this@MainActivity, snapshot.eventId)
                         LiveMatchNotifier.post(this@MainActivity, snapshot)
                         refreshKey++
                     }
                 },
-                onStop = {
+                onToggleTeamFollow = { teamId ->
+                    FollowStore.toggleTeam(this@MainActivity, teamId)
+                    refreshKey++
+                },
+                onTrackRealMatch = {
+                    current
+                        ?.takeIf { FootballRealDataSource.isRealEvent(it.eventId) }
+                        ?.let { snapshot ->
+                            FollowStore.trackMatch(this@MainActivity, snapshot.eventId)
+                            LiveMatchNotifier.post(this@MainActivity, snapshot)
+                        }
+                    refreshKey++
+                },
+                onStopTracking = {
+                    FollowStore.clearTrackedMatch(this@MainActivity)
                     LiveMatchNotifier.cancel(this@MainActivity)
                     refreshKey++
                 },
-                onUpdate = {
-                    current?.let {
-                        LiveMatchNotifier.post(this@MainActivity, matchDataSource.next(it))
+                onStartRealFootball = {
+                    if (!LiveMatchNotifier.hasNotificationPermission(this@MainActivity)) {
+                        requestNotificationsIfNeeded()
+                    } else {
+                        realLoading = true
+                        realMessage = null
+                        footballRealDataSource.refreshRealFootball { result ->
+                            runOnUiThread {
+                                realLoading = false
+                                result.fold(
+                                    onSuccess = { snapshot ->
+                                        // Refreshing data is independent from tracking the match.
+                                        MatchStore.save(this@MainActivity, snapshot)
+                                        realMessage = "已加载 fixture ${footballRealDataSource.configuredFixtureId}"
+                                        refreshKey++
+                                    },
+                                    onFailure = { error ->
+                                        realMessage = error.message ?: "真实足球数据加载失败"
+                                    }
+                                )
+                            }
+                        }
                     }
-                    refreshKey++
+                },
+                onUpdate = {
+                    current?.let { currentSnapshot ->
+                        matchDataSource.refresh(this@MainActivity, currentSnapshot) { result ->
+                            runOnUiThread {
+                                result.fold(
+                                    onSuccess = { snapshot ->
+                                        MatchStore.save(this@MainActivity, snapshot)
+                                        if (FollowStore.load(this@MainActivity).isTracked(snapshot.eventId)) {
+                                            LiveMatchNotifier.post(this@MainActivity, snapshot)
+                                            if (FootballRealDataSource.isRealEvent(snapshot.eventId)) {
+                                                realMessage = "已更新 fixture ${footballRealDataSource.configuredFixtureId}"
+                                            }
+                                        }
+                                        refreshKey++
+                                    },
+                                    onFailure = { error ->
+                                        if (FootballRealDataSource.isRealEvent(currentSnapshot.eventId)) {
+                                            realMessage = error.message ?: "真实足球数据更新失败"
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
                 },
                 onOpenPromotionSettings = ::openPromotionSettings
             )
@@ -137,7 +210,17 @@ private fun SportsNowBarApp(
     activity: Activity,
     dataSource: MatchDataSource,
     current: MatchSnapshot?,
+    followState: FollowState,
+    realFixtureId: String,
+    realConfigured: Boolean,
+    realFollowed: Boolean,
+    realLoading: Boolean,
+    realMessage: String?,
     onShowInNowBar: (MockEvent) -> Unit,
+    onToggleEventFollow: (String) -> Unit,
+    onToggleParticipantsFollow: (EventBranding) -> Unit,
+    onToggleRealFollow: () -> Unit,
+    onStartRealFootball: () -> Unit,
     onStop: () -> Unit,
     onUpdate: () -> Unit,
     onOpenPromotionSettings: () -> Unit
@@ -176,17 +259,94 @@ private fun SportsNowBarApp(
                 }
 
                 item { DiagnosticCard(activity, onOpenPromotionSettings) }
-                eventSectionCard("进行中", displayEvents.filter { it.section == EventSection.LIVE }, dataSource, current, onShowInNowBar, onStop, onUpdate)
-                eventSectionCard("即将开始", displayEvents.filter { it.section == EventSection.UPCOMING }, dataSource, current, onShowInNowBar, onStop, onUpdate)
-                eventSectionCard("已结束", displayEvents.filter { it.section == EventSection.FINISHED }, dataSource, current, onShowInNowBar, onStop, onUpdate)
+                item {
+                    RealFootballTestCard(
+                        fixtureId = realFixtureId,
+                        configured = realConfigured,
+                        followed = realFollowed,
+                        loading = realLoading,
+                        message = realMessage,
+                        snapshot = current?.takeIf { FootballRealDataSource.isRealEvent(it.eventId) },
+                        onToggleFollow = onToggleRealFollow,
+                        onStart = onStartRealFootball,
+                        onStop = onStop,
+                        onUpdate = onUpdate
+                    )
+                }
+                eventSectionCard("进行中", displayEvents.filter { it.section == EventSection.LIVE }, dataSource, current, followState, onShowInNowBar, onToggleEventFollow, onToggleParticipantsFollow, onStop, onUpdate)
+                eventSectionCard("即将开始", displayEvents.filter { it.section == EventSection.UPCOMING }, dataSource, current, followState, onShowInNowBar, onToggleEventFollow, onToggleParticipantsFollow, onStop, onUpdate)
+                eventSectionCard("已结束", displayEvents.filter { it.section == EventSection.FINISHED }, dataSource, current, followState, onShowInNowBar, onToggleEventFollow, onToggleParticipantsFollow, onStop, onUpdate)
 
                 item {
                     Text(
-                        text = "仅使用模拟数据。开始赛事，检查 Now Bar 紧凑状态，更新后再停止。",
+                        text = "模拟赛事保持原有行为；Real Football Test 只在手动启动或点击更新时请求一次，不会自动轮询。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp)
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RealFootballTestCard(
+    fixtureId: String,
+    configured: Boolean,
+    followed: Boolean,
+    loading: Boolean,
+    message: String?,
+    snapshot: MatchSnapshot?,
+    onToggleFollow: () -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onUpdate: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Real Football Test", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(
+                text = if (fixtureId.isBlank()) "fixtureId：未配置" else "fixtureId：$fixtureId",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (!configured) {
+                Text(
+                    text = "请在 local.properties 配置 API_FOOTBALL_KEY 和 API_FOOTBALL_FIXTURE_ID",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+            if (snapshot != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(snapshot.compactPrimary, fontWeight = FontWeight.Bold)
+                Text(snapshot.compactSecondaryLine, color = MaterialTheme.colorScheme.primary)
+                Text(snapshot.expandedDetails, style = MaterialTheme.typography.bodySmall)
+            }
+            OutlinedButton(onClick = onToggleFollow, enabled = configured) {
+                Text(if (followed) "取消关注本场赛事" else "关注本场赛事")
+            }
+            if (!message.isNullOrBlank()) {
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (snapshot == null) {
+                    Button(onClick = onStart, enabled = configured && !loading) {
+                        Text(if (loading) "加载中…" else "启动 Real Football Test")
+                    }
+                } else {
+                    OutlinedButton(onClick = onStop) { Text("停止") }
+                    Button(onClick = onUpdate, enabled = !loading) {
+                        Text(if (loading) "更新中…" else "更新")
+                    }
                 }
             }
         }
@@ -221,7 +381,10 @@ private fun LazyListScope.eventSectionCard(
     snapshots: List<MatchSnapshot>,
     dataSource: MatchDataSource,
     current: MatchSnapshot?,
+    followState: FollowState,
     onShowInNowBar: (MockEvent) -> Unit,
+    onToggleEventFollow: (String) -> Unit,
+    onToggleParticipantsFollow: (EventBranding) -> Unit,
     onStop: () -> Unit,
     onUpdate: () -> Unit
 ) {
@@ -232,7 +395,12 @@ private fun LazyListScope.eventSectionCard(
         EventCard(
             snapshot = snapshot,
             isShownInNowBar = snapshot.eventId == current?.eventId,
+            isEventFollowed = followState.isEventFollowed(snapshot.eventId),
+            areParticipantsFollowed = followState.isParticipantFollowed(snapshot.branding),
+            isFollowed = followState.isFollowed(snapshot),
             onShowInNowBar = { dataSource.findEvent(snapshot.eventId)?.let(onShowInNowBar) },
+            onToggleEventFollow = { onToggleEventFollow(snapshot.eventId) },
+            onToggleParticipantsFollow = { onToggleParticipantsFollow(snapshot.branding) },
             onStop = onStop,
             onUpdate = onUpdate
         )
@@ -243,7 +411,12 @@ private fun LazyListScope.eventSectionCard(
 private fun EventCard(
     snapshot: MatchSnapshot,
     isShownInNowBar: Boolean,
+    isEventFollowed: Boolean,
+    areParticipantsFollowed: Boolean,
+    isFollowed: Boolean,
     onShowInNowBar: () -> Unit,
+    onToggleEventFollow: () -> Unit,
+    onToggleParticipantsFollow: () -> Unit,
     onStop: () -> Unit,
     onUpdate: () -> Unit
 ) {
@@ -281,6 +454,15 @@ private fun EventCard(
             Spacer(Modifier.height(10.dp))
             Text(snapshot.expandedDetails, style = MaterialTheme.typography.bodyMedium)
 
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onToggleEventFollow) {
+                    Text(if (isEventFollowed) "取消赛事关注" else "关注赛事")
+                }
+                TextButton(onClick = onToggleParticipantsFollow) {
+                    Text(if (areParticipantsFollowed) "取消球队关注" else "关注球队")
+                }
+            }
+
             if (snapshot.section == EventSection.LIVE || isShownInNowBar) {
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -290,7 +472,16 @@ private fun EventCard(
                             Button(onClick = onUpdate) { Text("更新") }
                         }
                     } else {
-                        Button(onClick = onShowInNowBar) { Text("显示在 Now Bar") }
+                        if (isFollowed) {
+                            Button(onClick = onShowInNowBar) { Text("显示在 Now Bar") }
+                        } else {
+                            Text(
+                                text = "关注赛事或球队后才会推送",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
                     }
                 }
             }

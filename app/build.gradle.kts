@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -11,6 +13,17 @@ val samsungStandardOnly = providers.gradleProperty("samsungStandardOnly")
     .orElse("false")
     .get()
     .toBoolean()
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.isFile) {
+        localPropertiesFile.inputStream().use { load(it) }
+    }
+}
+
+fun localProperty(name: String): String = localProperties.getProperty(name).orEmpty()
+
+fun buildConfigString(value: String): String =
+    "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 android {
     namespace = "com.nowbarsports.poc"
@@ -29,6 +42,8 @@ android {
         versionName = if (samsungDiagnostic) "0.1.0-samsung-diagnostic" else "0.1.0"
         buildConfigField("boolean", "SAMSUNG_DIAGNOSTIC", samsungDiagnostic.toString())
         buildConfigField("boolean", "SAMSUNG_STANDARD_ONLY", samsungStandardOnly.toString())
+        buildConfigField("String", "API_FOOTBALL_KEY", buildConfigString(localProperty("API_FOOTBALL_KEY")))
+        buildConfigField("String", "API_FOOTBALL_FIXTURE_ID", buildConfigString(localProperty("API_FOOTBALL_FIXTURE_ID")))
         resValue(
             "string",
             "app_name",

@@ -107,8 +107,8 @@ object LiveMatchNotifier {
         }
 
         val notification = notificationBuilder
-            .addAction(R.drawable.ic_score, "模拟更新", updateIntent)
-            .addAction(R.drawable.ic_score, "结束", endIntent)
+            .addAction(R.drawable.ic_score, "刷新比分", updateIntent)
+            .addAction(R.drawable.ic_score, "停止推送", endIntent)
             .build()
 
         try {

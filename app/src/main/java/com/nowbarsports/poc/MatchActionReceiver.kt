@@ -6,11 +6,32 @@ import android.content.Intent
 
 class MatchActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val dataSource = MatchDataSources.current
         when (intent.action) {
             LiveMatchNotifier.ACTION_UPDATE -> {
-                val current = MatchStore.load(context, dataSource) ?: return
-                LiveMatchNotifier.post(context, dataSource.next(current))
+                val pendingResult = goAsync()
+                val dataSource = MatchDataSources.current
+                val current = runCatching { MatchStore.load(context, dataSource) }.getOrNull()
+                if (current == null) {
+                    pendingResult.finish()
+                    return
+                }
+                try {
+                    dataSource.refresh(context, current) { result ->
+                        try {
+                            result.onSuccess { snapshot ->
+                                if (FollowStore.load(context).isFollowed(snapshot)) {
+                                    LiveMatchNotifier.post(context, snapshot)
+                                } else {
+                                    LiveMatchNotifier.cancel(context)
+                                }
+                            }
+                        } finally {
+                            pendingResult.finish()
+                        }
+                    }
+                } catch (_: RuntimeException) {
+                    pendingResult.finish()
+                }
             }
             LiveMatchNotifier.ACTION_END -> LiveMatchNotifier.cancel(context)
         }

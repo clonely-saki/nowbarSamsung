@@ -1,5 +1,7 @@
 package com.nowbarsports.poc
 
+import android.content.Context
+
 interface MatchDataSource {
     fun events(): List<MockEvent>
 
@@ -10,6 +12,18 @@ interface MatchDataSource {
     fun restore(eventId: String, step: Int): MatchSnapshot?
 
     fun next(current: MatchSnapshot): MatchSnapshot
+
+    /**
+     * Refreshes the current event without making the UI or receiver know whether it is mock or real.
+     * Mock data remains synchronous internally; a real source performs network work off the caller thread.
+     */
+    fun refresh(context: Context, current: MatchSnapshot?, callback: (Result<MatchSnapshot>) -> Unit) {
+        if (current == null) {
+            callback(Result.failure(IllegalStateException("没有可更新的赛事")))
+        } else {
+            callback(runCatching { next(current) })
+        }
+    }
 }
 
 object MockMatchDataSource : MatchDataSource {
@@ -27,5 +41,6 @@ object MockMatchDataSource : MatchDataSource {
 }
 
 object MatchDataSources {
-    val current: MatchDataSource = MockMatchDataSource
+    val footballReal: FootballRealDataSource = FootballRealDataSource(MockMatchDataSource)
+    val current: MatchDataSource = footballReal
 }
