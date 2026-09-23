@@ -108,13 +108,17 @@ class MainActivity : ComponentActivity() {
                     refreshKey++
                 },
                 onTrackRealMatch = {
-                    current
-                        ?.takeIf { FootballRealDataSource.isRealEvent(it.eventId) }
-                        ?.let { snapshot ->
-                            FollowStore.trackMatch(this@MainActivity, snapshot.eventId)
-                            LiveMatchNotifier.post(this@MainActivity, snapshot)
-                        }
-                    refreshKey++
+                    if (!LiveMatchNotifier.hasNotificationPermission(this@MainActivity)) {
+                        requestNotificationsIfNeeded()
+                    } else {
+                        current
+                            ?.takeIf { FootballRealDataSource.isRealEvent(it.eventId) }
+                            ?.let { snapshot ->
+                                FollowStore.trackMatch(this@MainActivity, snapshot.eventId)
+                                LiveMatchNotifier.post(this@MainActivity, snapshot)
+                            }
+                        refreshKey++
+                    }
                 },
                 onStopTracking = {
                     FollowStore.clearTrackedMatch(this@MainActivity)
@@ -213,15 +217,14 @@ private fun SportsNowBarApp(
     followState: FollowState,
     realFixtureId: String,
     realConfigured: Boolean,
-    realFollowed: Boolean,
+    realTracked: Boolean,
     realLoading: Boolean,
     realMessage: String?,
-    onShowInNowBar: (MockEvent) -> Unit,
-    onToggleEventFollow: (String) -> Unit,
-    onToggleParticipantsFollow: (EventBranding) -> Unit,
-    onToggleRealFollow: () -> Unit,
+    onTrackMatch: (MockEvent) -> Unit,
+    onToggleTeamFollow: (String) -> Unit,
+    onTrackRealMatch: () -> Unit,
+    onStopTracking: () -> Unit,
     onStartRealFootball: () -> Unit,
-    onStop: () -> Unit,
     onUpdate: () -> Unit,
     onOpenPromotionSettings: () -> Unit
 ) {
@@ -263,23 +266,25 @@ private fun SportsNowBarApp(
                     RealFootballTestCard(
                         fixtureId = realFixtureId,
                         configured = realConfigured,
-                        followed = realFollowed,
+                        tracked = realTracked,
                         loading = realLoading,
                         message = realMessage,
                         snapshot = current?.takeIf { FootballRealDataSource.isRealEvent(it.eventId) },
-                        onToggleFollow = onToggleRealFollow,
+                        followedTeamIds = followState.followedTeamIds,
+                        onToggleTeamFollow = onToggleTeamFollow,
+                        onTrack = onTrackRealMatch,
                         onStart = onStartRealFootball,
-                        onStop = onStop,
+                        onStop = onStopTracking,
                         onUpdate = onUpdate
                     )
                 }
-                eventSectionCard("进行中", displayEvents.filter { it.section == EventSection.LIVE }, dataSource, current, followState, onShowInNowBar, onToggleEventFollow, onToggleParticipantsFollow, onStop, onUpdate)
-                eventSectionCard("即将开始", displayEvents.filter { it.section == EventSection.UPCOMING }, dataSource, current, followState, onShowInNowBar, onToggleEventFollow, onToggleParticipantsFollow, onStop, onUpdate)
-                eventSectionCard("已结束", displayEvents.filter { it.section == EventSection.FINISHED }, dataSource, current, followState, onShowInNowBar, onToggleEventFollow, onToggleParticipantsFollow, onStop, onUpdate)
+                eventSectionCard("进行中", displayEvents.filter { it.section == EventSection.LIVE }, current, followState, onTrackMatch, onToggleTeamFollow, onStopTracking)
+                eventSectionCard("即将开始", displayEvents.filter { it.section == EventSection.UPCOMING }, current, followState, onTrackMatch, onToggleTeamFollow, onStopTracking)
+                eventSectionCard("已结束", displayEvents.filter { it.section == EventSection.FINISHED }, current, followState, onTrackMatch, onToggleTeamFollow, onStopTracking)
 
                 item {
                     Text(
-                        text = "模拟赛事保持原有行为；Real Football Test 只在手动启动或点击更新时请求一次，不会自动轮询。",
+                        text = "Mock 赛事仅用于开发验证；真实足球数据仅在手动加载或刷新时请求，不会自动轮询。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp)
@@ -294,20 +299,22 @@ private fun SportsNowBarApp(
 private fun RealFootballTestCard(
     fixtureId: String,
     configured: Boolean,
-    followed: Boolean,
+    tracked: Boolean,
     loading: Boolean,
     message: String?,
     snapshot: MatchSnapshot?,
-    onToggleFollow: () -> Unit,
+    followedTeamIds: Set<String>,
+    onToggleTeamFollow: (String) -> Unit,
+    onTrack: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onUpdate: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text("Real Football Test", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("真实足球赛事", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(
-                text = if (fixtureId.isBlank()) "fixtureId：未配置" else "fixtureId：$fixtureId",
+                text = if (fixtureId.isBlank()) "Fixture：未配置" else "Fixture：$fixtureId",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -321,12 +328,11 @@ private fun RealFootballTestCard(
             }
             if (snapshot != null) {
                 Spacer(Modifier.height(10.dp))
+                BrandingRow(snapshot.branding)
+                TeamFollowRow(snapshot.branding, followedTeamIds, onToggleTeamFollow)
                 Text(snapshot.compactPrimary, fontWeight = FontWeight.Bold)
                 Text(snapshot.compactSecondaryLine, color = MaterialTheme.colorScheme.primary)
                 Text(snapshot.expandedDetails, style = MaterialTheme.typography.bodySmall)
-            }
-            OutlinedButton(onClick = onToggleFollow, enabled = configured) {
-                Text(if (followed) "取消关注本场赛事" else "关注本场赛事")
             }
             if (!message.isNullOrBlank()) {
                 Text(
@@ -340,12 +346,16 @@ private fun RealFootballTestCard(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (snapshot == null) {
                     Button(onClick = onStart, enabled = configured && !loading) {
-                        Text(if (loading) "加载中…" else "启动 Real Football Test")
+                        Text(if (loading) "加载中…" else "加载真实比分")
                     }
                 } else {
-                    OutlinedButton(onClick = onStop) { Text("停止") }
+                    if (tracked) {
+                        OutlinedButton(onClick = onStop) { Text("✓ 正在追踪") }
+                    } else {
+                        Button(onClick = onTrack) { Text("追踪本场") }
+                    }
                     Button(onClick = onUpdate, enabled = !loading) {
-                        Text(if (loading) "更新中…" else "更新")
+                        Text(if (loading) "刷新中…" else "刷新比分")
                     }
                 }
             }
@@ -379,14 +389,11 @@ private fun DiagnosticCard(activity: Activity, onOpenPromotionSettings: () -> Un
 private fun LazyListScope.eventSectionCard(
     title: String,
     snapshots: List<MatchSnapshot>,
-    dataSource: MatchDataSource,
     current: MatchSnapshot?,
     followState: FollowState,
-    onShowInNowBar: (MockEvent) -> Unit,
-    onToggleEventFollow: (String) -> Unit,
-    onToggleParticipantsFollow: (EventBranding) -> Unit,
-    onStop: () -> Unit,
-    onUpdate: () -> Unit
+    onTrackMatch: (MockEvent) -> Unit,
+    onToggleTeamFollow: (String) -> Unit,
+    onStopTracking: () -> Unit
 ) {
     item {
         Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -394,15 +401,13 @@ private fun LazyListScope.eventSectionCard(
     items(snapshots, key = { it.eventId }) { snapshot ->
         EventCard(
             snapshot = snapshot,
-            isShownInNowBar = snapshot.eventId == current?.eventId,
-            isEventFollowed = followState.isEventFollowed(snapshot.eventId),
-            areParticipantsFollowed = followState.isParticipantFollowed(snapshot.branding),
-            isFollowed = followState.isFollowed(snapshot),
-            onShowInNowBar = { dataSource.findEvent(snapshot.eventId)?.let(onShowInNowBar) },
-            onToggleEventFollow = { onToggleEventFollow(snapshot.eventId) },
-            onToggleParticipantsFollow = { onToggleParticipantsFollow(snapshot.branding) },
-            onStop = onStop,
-            onUpdate = onUpdate
+            isTracked = followState.isTracked(snapshot.eventId),
+            followedTeamIds = followState.followedTeamIds,
+            onTrackMatch = {
+                MockEventCatalog.find(snapshot.eventId)?.let(onTrackMatch)
+            },
+            onToggleTeamFollow = onToggleTeamFollow,
+            onStopTracking = onStopTracking
         )
     }
 }
@@ -410,15 +415,11 @@ private fun LazyListScope.eventSectionCard(
 @Composable
 private fun EventCard(
     snapshot: MatchSnapshot,
-    isShownInNowBar: Boolean,
-    isEventFollowed: Boolean,
-    areParticipantsFollowed: Boolean,
-    isFollowed: Boolean,
-    onShowInNowBar: () -> Unit,
-    onToggleEventFollow: () -> Unit,
-    onToggleParticipantsFollow: () -> Unit,
-    onStop: () -> Unit,
-    onUpdate: () -> Unit
+    isTracked: Boolean,
+    followedTeamIds: Set<String>,
+    onTrackMatch: () -> Unit,
+    onToggleTeamFollow: (String) -> Unit,
+    onStopTracking: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -454,38 +455,60 @@ private fun EventCard(
             Spacer(Modifier.height(10.dp))
             Text(snapshot.expandedDetails, style = MaterialTheme.typography.bodyMedium)
 
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = onToggleEventFollow) {
-                    Text(if (isEventFollowed) "取消赛事关注" else "关注赛事")
-                }
-                TextButton(onClick = onToggleParticipantsFollow) {
-                    Text(if (areParticipantsFollowed) "取消球队关注" else "关注球队")
-                }
-            }
+            TeamFollowRow(snapshot.branding, followedTeamIds, onToggleTeamFollow)
 
-            if (snapshot.section == EventSection.LIVE || isShownInNowBar) {
+            if (snapshot.section != EventSection.FINISHED || isTracked) {
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (isShownInNowBar) {
-                        OutlinedButton(onClick = onStop) { Text("停止") }
-                        if (snapshot.section == EventSection.LIVE) {
-                            Button(onClick = onUpdate) { Text("更新") }
-                        }
+                    if (isTracked) {
+                        OutlinedButton(onClick = onStopTracking) { Text("✓ 正在追踪") }
                     } else {
-                        if (isFollowed) {
-                            Button(onClick = onShowInNowBar) { Text("显示在 Now Bar") }
-                        } else {
-                            Text(
-                                text = "关注赛事或球队后才会推送",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            )
-                        }
+                        Button(onClick = onTrackMatch) { Text("追踪本场") }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TeamFollowRow(
+    branding: EventBranding,
+    followedTeamIds: Set<String>,
+    onToggleTeamFollow: (String) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        TeamFollowButton(branding.primary, followedTeamIds, onToggleTeamFollow, Modifier.weight(1f))
+        branding.secondary?.let { secondary ->
+            TeamFollowButton(secondary, followedTeamIds, onToggleTeamFollow, Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun TeamFollowButton(
+    identity: BrandIdentity,
+    followedTeamIds: Set<String>,
+    onToggleTeamFollow: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val teamId = FollowStore.teamId(identity)
+    TextButton(
+        modifier = modifier,
+        onClick = { onToggleTeamFollow(teamId) }
+    ) {
+        Text(
+            text = if (teamId in followedTeamIds) {
+                "★ 已关注 ${identity.name}"
+            } else {
+                "☆ 关注 ${identity.name}"
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

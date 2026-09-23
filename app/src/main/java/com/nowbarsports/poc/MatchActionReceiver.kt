@@ -11,7 +11,8 @@ class MatchActionReceiver : BroadcastReceiver() {
                 val pendingResult = goAsync()
                 val dataSource = MatchDataSources.current
                 val current = runCatching { MatchStore.load(context, dataSource) }.getOrNull()
-                if (current == null) {
+                if (current == null || !FollowStore.load(context).isTracked(current.eventId)) {
+                    LiveMatchNotifier.cancel(context)
                     pendingResult.finish()
                     return
                 }
@@ -19,7 +20,7 @@ class MatchActionReceiver : BroadcastReceiver() {
                     dataSource.refresh(context, current) { result ->
                         try {
                             result.onSuccess { snapshot ->
-                                if (FollowStore.load(context).isFollowed(snapshot)) {
+                                if (FollowStore.load(context).isTracked(snapshot.eventId)) {
                                     LiveMatchNotifier.post(context, snapshot)
                                 } else {
                                     LiveMatchNotifier.cancel(context)
@@ -33,7 +34,10 @@ class MatchActionReceiver : BroadcastReceiver() {
                     pendingResult.finish()
                 }
             }
-            LiveMatchNotifier.ACTION_END -> LiveMatchNotifier.cancel(context)
+            LiveMatchNotifier.ACTION_END -> {
+                FollowStore.clearTrackedMatch(context)
+                LiveMatchNotifier.cancel(context)
+            }
         }
     }
 }
