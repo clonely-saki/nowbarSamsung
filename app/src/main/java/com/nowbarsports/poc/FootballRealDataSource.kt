@@ -1,6 +1,7 @@
 package com.nowbarsports.poc
 
 import android.content.Context
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -27,6 +28,11 @@ class FootballRealDataSource(
     @Volatile
     private var lastKnownGood: MatchSnapshot? = null
 
+    private val fixturePresentations = ConcurrentHashMap<String, FootballFixturePresentation>()
+
+    fun presentationFor(context: Context, eventId: String): FootballFixturePresentation? =
+        fixturePresentations[eventId] ?: FootballFixturePresentationStore.load(context, eventId)
+
     val isConfigured: Boolean
         get() = BuildConfig.API_FOOTBALL_KEY.isNotBlank() && configuredFixtureId.isNotBlank()
 
@@ -40,8 +46,8 @@ class FootballRealDataSource(
 
     override fun next(current: MatchSnapshot): MatchSnapshot = mockDataSource.next(current)
 
-    fun refreshRealFootball(callback: (Result<MatchSnapshot>) -> Unit) {
-        refreshReal(previous = lastKnownGood, callback = callback)
+    fun refreshRealFootball(context: Context, callback: (Result<MatchSnapshot>) -> Unit) {
+        refreshReal(context, previous = lastKnownGood, callback = callback)
     }
 
     override fun refresh(
@@ -55,12 +61,17 @@ class FootballRealDataSource(
         }
 
         refreshReal(
+            context = context,
             previous = current?.takeIf { isRealEvent(it.eventId) } ?: lastKnownGood,
             callback = callback
         )
     }
 
-    private fun refreshReal(previous: MatchSnapshot?, callback: (Result<MatchSnapshot>) -> Unit) {
+    private fun refreshReal(
+        context: Context,
+        previous: MatchSnapshot?,
+        callback: (Result<MatchSnapshot>) -> Unit
+    ) {
         val fixtureId = configuredFixtureId.trim()
         if (BuildConfig.API_FOOTBALL_KEY.isBlank()) {
             callback(Result.failure(FootballApiException("未配置 API_FOOTBALL_KEY")))
@@ -74,7 +85,11 @@ class FootballRealDataSource(
         executor.execute {
             val result = runCatching {
                 val dto = apiClient.fetchFixture(fixtureId)
-                FootballFixtureMapper.toSnapshot(dto, (previous?.step ?: -1) + 1)
+                val snapshot = FootballFixtureMapper.toSnapshot(dto, (previous?.step ?: -1) + 1)
+                val presentation = FootballFixturePresentationMapper.from(dto)
+                fixturePresentations[snapshot.eventId] = presentation
+                FootballFixturePresentationStore.save(context, snapshot.eventId, presentation)
+                snapshot
             }.onSuccess { snapshot ->
                 lastKnownGood = snapshot
             }

@@ -110,6 +110,9 @@ object FootballFixtureMapper {
         date?.replace('T', ' ')?.take(16)
     }
 
+    internal fun kickoffTextForUi(timestamp: Long?, date: String?): String? =
+        kickoffText(timestamp, date)
+
     private fun TeamInfoDto.toBrandIdentity(): BrandIdentity {
         val fullName = name?.takeIf { it.isNotBlank() } ?: code ?: "Unknown"
         val short = code?.takeIf { it.isNotBlank() }

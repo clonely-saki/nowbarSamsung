@@ -21,7 +21,7 @@ class MatchActionReceiver : BroadcastReceiver() {
                         try {
                             result.onSuccess { snapshot ->
                                 if (FollowStore.load(context).isTracked(snapshot.eventId)) {
-                                    LiveMatchNotifier.post(context, snapshot)
+                                    LiveMatchNotificationPublisher.post(context, snapshot)
                                 } else {
                                     LiveMatchNotifier.cancel(context)
                                 }

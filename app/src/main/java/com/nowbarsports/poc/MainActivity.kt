@@ -82,6 +82,9 @@ class MainActivity : ComponentActivity() {
                 dataSource = matchDataSource,
                 current = current,
                 followState = followState,
+                realPresentation = current
+                    ?.takeIf { FootballRealDataSource.isRealEvent(it.eventId) }
+                    ?.let { footballRealDataSource.presentationFor(this@MainActivity, it.eventId) },
                 realFixtureId = footballRealDataSource.configuredFixtureId,
                 realConfigured = footballRealDataSource.isConfigured,
                 realTracked = followState.isTracked(
@@ -99,7 +102,7 @@ class MainActivity : ComponentActivity() {
                             matchDataSource.initial(event.id)
                         }
                         FollowStore.trackMatch(this@MainActivity, snapshot.eventId)
-                        LiveMatchNotifier.post(this@MainActivity, snapshot)
+                        LiveMatchNotificationPublisher.post(this@MainActivity, snapshot)
                         refreshKey++
                     }
                 },
@@ -115,7 +118,7 @@ class MainActivity : ComponentActivity() {
                             ?.takeIf { FootballRealDataSource.isRealEvent(it.eventId) }
                             ?.let { snapshot ->
                                 FollowStore.trackMatch(this@MainActivity, snapshot.eventId)
-                                LiveMatchNotifier.post(this@MainActivity, snapshot)
+                                LiveMatchNotificationPublisher.post(this@MainActivity, snapshot)
                             }
                         refreshKey++
                     }
@@ -131,7 +134,7 @@ class MainActivity : ComponentActivity() {
                     } else {
                         realLoading = true
                         realMessage = null
-                        footballRealDataSource.refreshRealFootball { result ->
+                        footballRealDataSource.refreshRealFootball(this@MainActivity) { result ->
                             runOnUiThread {
                                 realLoading = false
                                 result.fold(
@@ -157,7 +160,7 @@ class MainActivity : ComponentActivity() {
                                     onSuccess = { snapshot ->
                                         MatchStore.save(this@MainActivity, snapshot)
                                         if (FollowStore.load(this@MainActivity).isTracked(snapshot.eventId)) {
-                                            LiveMatchNotifier.post(this@MainActivity, snapshot)
+                                            LiveMatchNotificationPublisher.post(this@MainActivity, snapshot)
                                             if (FootballRealDataSource.isRealEvent(snapshot.eventId)) {
                                                 realMessage = "已更新 fixture ${footballRealDataSource.configuredFixtureId}"
                                             }
@@ -215,6 +218,7 @@ private fun SportsNowBarApp(
     dataSource: MatchDataSource,
     current: MatchSnapshot?,
     followState: FollowState,
+    realPresentation: FootballFixturePresentation?,
     realFixtureId: String,
     realConfigured: Boolean,
     realTracked: Boolean,
@@ -270,6 +274,7 @@ private fun SportsNowBarApp(
                         loading = realLoading,
                         message = realMessage,
                         snapshot = current?.takeIf { FootballRealDataSource.isRealEvent(it.eventId) },
+                        presentation = realPresentation,
                         followedTeamIds = followState.followedTeamIds,
                         onToggleTeamFollow = onToggleTeamFollow,
                         onTrack = onTrackRealMatch,
@@ -303,6 +308,7 @@ private fun RealFootballTestCard(
     loading: Boolean,
     message: String?,
     snapshot: MatchSnapshot?,
+    presentation: FootballFixturePresentation?,
     followedTeamIds: Set<String>,
     onToggleTeamFollow: (String) -> Unit,
     onTrack: () -> Unit,
@@ -312,27 +318,40 @@ private fun RealFootballTestCard(
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text("真实足球赛事", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text(
-                text = if (fixtureId.isBlank()) "Fixture：未配置" else "Fixture：$fixtureId",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Text("足球", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             if (!configured) {
                 Text(
-                    text = "请在 local.properties 配置 API_FOOTBALL_KEY 和 API_FOOTBALL_FIXTURE_ID",
+                    text = "开发信息：请配置 API-Football key 与 fixture ID",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 8.dp)
                 )
             }
             if (snapshot != null) {
+                Spacer(Modifier.height(8.dp))
+                FootballScoreCard(
+                    snapshot = snapshot,
+                    presentation = presentation,
+                    followedTeamIds = followedTeamIds,
+                    tracked = tracked,
+                    onToggleTeamFollow = onToggleTeamFollow,
+                    onTrack = onTrack,
+                    onStopTracking = onStop
+                )
+                Text(
+                    text = "开发信息 · Fixture ${fixtureId.ifBlank { "未配置" }}",
+                    modifier = Modifier.padding(top = 8.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(onClick = onUpdate, enabled = !loading) {
+                    Text(if (loading) "刷新中…" else "刷新比分")
+                }
+            } else {
                 Spacer(Modifier.height(10.dp))
-                BrandingRow(snapshot.branding)
-                TeamFollowRow(snapshot.branding, followedTeamIds, onToggleTeamFollow)
-                Text(snapshot.compactPrimary, fontWeight = FontWeight.Bold)
-                Text(snapshot.compactSecondaryLine, color = MaterialTheme.colorScheme.primary)
-                Text(snapshot.expandedDetails, style = MaterialTheme.typography.bodySmall)
+                Button(onClick = onStart, enabled = configured && !loading) {
+                    Text(if (loading) "加载中…" else "加载真实比分")
+                }
             }
             if (!message.isNullOrBlank()) {
                 Text(
@@ -341,23 +360,6 @@ private fun RealFootballTestCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp)
                 )
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (snapshot == null) {
-                    Button(onClick = onStart, enabled = configured && !loading) {
-                        Text(if (loading) "加载中…" else "加载真实比分")
-                    }
-                } else {
-                    if (tracked) {
-                        OutlinedButton(onClick = onStop) { Text("✓ 正在追踪") }
-                    } else {
-                        Button(onClick = onTrack) { Text("追踪本场") }
-                    }
-                    Button(onClick = onUpdate, enabled = !loading) {
-                        Text(if (loading) "刷新中…" else "刷新比分")
-                    }
-                }
             }
         }
     }
