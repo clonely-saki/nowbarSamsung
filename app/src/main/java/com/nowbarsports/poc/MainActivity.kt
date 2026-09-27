@@ -102,7 +102,7 @@ class MainActivity : ComponentActivity() {
                             matchDataSource.initial(event.id)
                         }
                         FollowStore.trackMatch(this@MainActivity, snapshot.eventId)
-                        LiveMatchNotificationPublisher.post(this@MainActivity, snapshot)
+                        LiveMatchNotifier.post(this@MainActivity, snapshot)
                         refreshKey++
                     }
                 },
@@ -118,7 +118,7 @@ class MainActivity : ComponentActivity() {
                             ?.takeIf { FootballRealDataSource.isRealEvent(it.eventId) }
                             ?.let { snapshot ->
                                 FollowStore.trackMatch(this@MainActivity, snapshot.eventId)
-                                LiveMatchNotificationPublisher.post(this@MainActivity, snapshot)
+                                LiveMatchNotifier.post(this@MainActivity, snapshot)
                             }
                         refreshKey++
                     }
@@ -160,7 +160,7 @@ class MainActivity : ComponentActivity() {
                                     onSuccess = { snapshot ->
                                         MatchStore.save(this@MainActivity, snapshot)
                                         if (FollowStore.load(this@MainActivity).isTracked(snapshot.eventId)) {
-                                            LiveMatchNotificationPublisher.post(this@MainActivity, snapshot)
+                                            LiveMatchNotifier.post(this@MainActivity, snapshot)
                                             if (FootballRealDataSource.isRealEvent(snapshot.eventId)) {
                                                 realMessage = "已更新 fixture ${footballRealDataSource.configuredFixtureId}"
                                             }

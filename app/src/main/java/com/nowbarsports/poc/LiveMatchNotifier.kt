@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.drawable.Icon
 import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -25,8 +24,6 @@ object LiveMatchNotifier {
     private const val SAMSUNG_SECONDARY_INFO_KEY = "android.ongoingActivityNoti.secondaryInfo"
     private const val SAMSUNG_NOWBAR_PRIMARY_INFO_KEY = "android.ongoingActivityNoti.nowbarPrimaryInfo"
     private const val SAMSUNG_NOWBAR_SECONDARY_INFO_KEY = "android.ongoingActivityNoti.nowbarSecondaryInfo"
-    private const val SAMSUNG_FIRST_ICON_KEY = "android.ongoingActivityNoti.firstIcon"
-    private const val SAMSUNG_SECOND_ICON_KEY = "android.ongoingActivityNoti.secondIcon"
 
     fun ensureChannel(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -42,12 +39,7 @@ object LiveMatchNotifier {
         manager.createNotificationChannel(channel)
     }
 
-    fun post(
-        context: Context,
-        snapshot: MatchSnapshot,
-        firstIcon: Icon? = null,
-        secondIcon: Icon? = null
-    ) {
+    fun post(context: Context, snapshot: MatchSnapshot) {
         ensureChannel(context)
         if (!hasNotificationPermission(context)) return
 
@@ -93,15 +85,6 @@ object LiveMatchNotifier {
             putCharSequence(SAMSUNG_NOWBAR_SECONDARY_INFO_KEY, compactSecondary)
         }
 
-        val diagnosticIcons = BuildConfig.SAMSUNG_DIAGNOSTIC &&
-            snapshot.kind == MatchKind.FOOTBALL &&
-            FootballRealDataSource.isRealEvent(snapshot.eventId) &&
-            firstIcon != null && secondIcon != null
-        if (diagnosticIcons) {
-            samsungExtras.putParcelable(SAMSUNG_FIRST_ICON_KEY, firstIcon)
-            samsungExtras.putParcelable(SAMSUNG_SECOND_ICON_KEY, secondIcon)
-        }
-
         val notificationBuilder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_score)
             // The standard Android Live Update path always carries the rich expanded content.
@@ -117,9 +100,9 @@ object LiveMatchNotifier {
             .setRequestPromotedOngoing(true)
             .setShortCriticalText(snapshot.chip.take(7))
 
-        // Keep the verified standard-only fallback; include the existing Samsung text
-        // fields when the diagnostic two-icon experiment is ready.
-        if (!BuildConfig.SAMSUNG_STANDARD_ONLY || diagnosticIcons) {
+        // Controlled A/B mode: keep the Samsung package identity and manifest metadata,
+        // but let the official Android Live Update renderer receive no Samsung-private extras.
+        if (!BuildConfig.SAMSUNG_STANDARD_ONLY) {
             notificationBuilder.setExtras(samsungExtras)
         }
 
